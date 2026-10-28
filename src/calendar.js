@@ -173,6 +173,21 @@ export function notifiedAttendees(event, selfEmail) {
     .map((a) => a.email);
 }
 
+// What deleting this event takes with it. Ids from list_events/search_events
+// are single occurrences (singleEvents: true), but an id from anywhere else
+// can be a recurring series' parent, and deleting that removes every
+// occurrence, past and future.
+export function deleteScope(event) {
+  if (event.recurrence?.length) {
+    return {
+      scope: "entire_series",
+      warning:
+        "This id is a RECURRING SERIES, not one occurrence. Deleting it removes every occurrence, past and future. To remove just one, use that occurrence's id from list_events or search_events instead.",
+    };
+  }
+  return { scope: event.recurringEventId ? "single_occurrence" : "single_event" };
+}
+
 // --- Display ----------------------------------------------------------------
 function whenOf(t) {
   return t ? t.dateTime || t.date : undefined;

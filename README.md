@@ -23,7 +23,7 @@ confirm flag to touch your calendar:
 | --- | --- | --- |
 | `create_event` | `confirm_create: true` | The exact event, and every guest Google will email an invitation to |
 | `update_event` | `confirm_update: true` | A field-by-field before/after, and everyone who'll get an update email |
-| `delete_event` | `confirm_delete: true` | The event, and who'll get a cancellation (only if this account is the organizer) |
+| `delete_event` | `confirm_delete: true` plus the preview's `etag` | The event, who'll get a cancellation (only if this account is the organizer), a warning if the id is a whole recurring series, and an `etag`. If the event changes after the preview, nothing is deleted and a fresh preview is returned |
 | `respond_to_event` | `confirm_send: true` | Your response changing from X to Y, and the organizer who's notified |
 
 Every dry run and every real write is appended to the shared audit log

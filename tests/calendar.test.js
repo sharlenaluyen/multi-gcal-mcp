@@ -7,6 +7,7 @@ import {
   buildEventBody,
   buildEventPatch,
   notifiedAttendees,
+  deleteScope,
   summarizeEvent,
   diffEvent,
   buildRsvpAttendees,
@@ -191,4 +192,14 @@ test("assertCanListCalendars explains the extra scope list_calendars needs", () 
   assert.doesNotThrow(() =>
     assertCanListCalendars({ ...base, scopes: [`${G}calendar.events`, `${G}calendar.calendarlist.readonly`] })
   );
+});
+
+test("deleteScope warns when the id is a whole recurring series", () => {
+  const series = deleteScope({ id: "abc", recurrence: ["RRULE:FREQ=WEEKLY"] });
+  assert.equal(series.scope, "entire_series");
+  assert.match(series.warning, /every occurrence/);
+  assert.deepEqual(deleteScope({ id: "abc_20261103T170000Z", recurringEventId: "abc" }), {
+    scope: "single_occurrence",
+  });
+  assert.deepEqual(deleteScope({ id: "one" }), { scope: "single_event" });
 });

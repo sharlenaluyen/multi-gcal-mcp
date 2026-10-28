@@ -10,6 +10,7 @@ import {
   buildEventBody,
   buildEventPatch,
   notifiedAttendees,
+  deleteScope,
   summarizeEvent,
   diffEvent,
   buildRsvpAttendees,
@@ -337,7 +338,7 @@ defineTool(
 
 defineTool(
   "delete_event",
-  `Delete an event. By default this is a DRY RUN that shows the event and who would get a cancellation email. Pass confirm_delete: true only once that's been reviewed. If this account organizes the event, every guest gets a cancellation; if it's only a guest, the event is removed from this calendar and nobody is emailed.${aliasEnumHint()}`,
+  `Delete an event. By default this is a DRY RUN that shows the event, who would get a cancellation email, and whether the id is a whole recurring series. Pass confirm_delete: true with the preview's etag only once that's been reviewed; if the event changed since the preview, nothing is deleted and a fresh preview is returned. If this account organizes the event, every guest gets a cancellation; if it's only a guest, the event is removed from this calendar and nobody is emailed. Ids from list_events/search_events are single occurrences; any other id may be a recurring series, and deleting that removes every occurrence.${aliasEnumHint()}`,
   {
     account: z.string(),
     calendar_id: calendarId,
@@ -346,46 +347,70 @@ defineTool(
       .boolean()
       .default(false)
       .describe("Must be explicitly true to actually delete. False (default) returns a preview only."),
+    etag: z
+      .string()
+      .max(256)
+      .optional()
+      .describe(
+        "The etag from the dry-run preview. Required with confirm_delete: true, so the delete only goes through if the event is unchanged since it was reviewed."
+      ),
   },
-  async ({ account, calendar_id, event_id, confirm_delete }) => {
+  async ({ account, calendar_id, event_id, confirm_delete, etag }) => {
     const info = getAccountInfo(account);
+    if (confirm_delete && !etag) {
+      throw new Error("Pass the etag from the dry-run preview along with confirm_delete: true.");
+    }
     const calendar = calendarClientFor(account);
     const { data: current } = await withRetry(() =>
       calendar.events.get({ calendarId: calendar_id, eventId: event_id })
     );
     const isOrganizer = Boolean(current.organizer?.self);
     const emailed = isOrganizer ? notifiedAttendees(current, info.email) : [];
+    const { scope, warning } = deleteScope(current);
     const detail = {
       calendar_id,
       event_id,
       start: current.start,
+      scope,
       organizer: isOrganizer,
       attendees: emailed,
     };
+    const preview = {
+      dry_run: true,
+      notice: UNTRUSTED_NOTICE,
+      ...(warning ? { warning } : {}),
+      scope,
+      would_delete: summarizeEvent(current),
+      ...(current.recurrence ? { recurrence: current.recurrence } : {}),
+      cancellations_emailed_to: emailed,
+      etag: current.etag,
+      note: "Re-call with confirm_delete: true and this etag to actually delete this event.",
+    };
 
-    if (!confirm_delete) {
+    if (!confirm_delete || etag !== current.etag) {
+      const stale = Boolean(confirm_delete);
       logAuditEvent({
         action: "delete_event",
         account: info.alias,
         email: info.email,
-        outcome: "dry_run",
+        outcome: stale ? "changed_since_preview" : "dry_run",
         detail,
       });
+      if (!stale) return jsonResult(preview);
       return jsonResult({
-        dry_run: true,
-        notice: UNTRUSTED_NOTICE,
-        would_delete: summarizeEvent(current),
-        cancellations_emailed_to: emailed,
-        note: "Re-call with confirm_delete: true to actually delete this event.",
+        changed_since_preview: true,
+        ...preview,
+        note: "Nothing was deleted: the event changed after it was previewed. Review this fresh preview, then re-call with confirm_delete: true and the new etag.",
       });
     }
 
     try {
-      await calendar.events.delete({
-        calendarId: calendar_id,
-        eventId: event_id,
-        sendUpdates: emailed.length ? "all" : "none",
-      });
+      // If-Match makes Google refuse the delete if the event changes between
+      // the check above and this call.
+      await calendar.events.delete(
+        { calendarId: calendar_id, eventId: event_id, sendUpdates: emailed.length ? "all" : "none" },
+        { headers: { "If-Match": current.etag } }
+      );
       logAuditEvent({
         action: "delete_event",
         account: info.alias,
@@ -393,9 +418,19 @@ defineTool(
         outcome: "deleted",
         detail,
       });
-      return jsonResult({ deleted_event_id: event_id, cancellations_emailed_to: emailed });
+      return jsonResult({ deleted_event_id: event_id, scope, cancellations_emailed_to: emailed });
     } catch (err) {
-      throw writeError("delete_event", info, detail, err);
+      const changed = err?.code === 412 || err?.status === 412;
+      throw writeError(
+        "delete_event",
+        info,
+        detail,
+        changed
+          ? new Error(
+              "Nothing was deleted: the event changed just before the delete. Call delete_event again without confirm_delete for a fresh preview."
+            )
+          : err
+      );
     }
   }
 );
