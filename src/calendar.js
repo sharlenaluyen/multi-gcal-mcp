@@ -1,3 +1,4 @@
+import { URL } from "url";
 import { google } from "googleapis";
 import {
   getAccountInfo,
@@ -40,6 +41,8 @@ export const MAX_SUMMARY_LENGTH = 1024;
 export const MAX_DESCRIPTION_LENGTH = 8192; // Google's own cap on event descriptions
 export const MAX_LOCATION_LENGTH = 1024;
 export const MAX_ATTENDEES = 100;
+export const MAX_ATTACHMENTS = 25; // Google's own cap per event
+export const MAX_ATTACHMENT_TITLE_LENGTH = 256;
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 // RFC 3339 date-time; the offset is optional only when a time zone is given.
@@ -54,6 +57,37 @@ export function assertEmail(value) {
     throw new Error(`"${value}" isn't a single plain email address.`);
   }
   return email.toLowerCase();
+}
+
+// Google Calendar only accepts Google Drive files as attachments, so the URL
+// must be a Drive/Docs link - anything else is refused before Google sees it.
+const DRIVE_HOSTS = new Set(["drive.google.com", "docs.google.com"]);
+
+export function normalizeAttachments(list) {
+  if (!list) return [];
+  if (list.length > MAX_ATTACHMENTS) {
+    throw new Error(`Too many attachments (${list.length}, max ${MAX_ATTACHMENTS}).`);
+  }
+  const seen = new Set();
+  const out = [];
+  for (const { file_url, title } of list) {
+    let url;
+    try {
+      url = new URL(String(file_url || "").trim());
+    } catch {
+      throw new Error(`"${file_url}" isn't a URL. Pass the file's Drive link (webViewLink).`);
+    }
+    if (url.protocol !== "https:" || !DRIVE_HOSTS.has(url.hostname)) {
+      throw new Error(
+        `"${file_url}" isn't a Google Drive link. Calendar can only attach Drive files - pass the file's webViewLink from the Drive server.`
+      );
+    }
+    assertLength("attachment title", title, MAX_ATTACHMENT_TITLE_LENGTH);
+    if (seen.has(url.href)) continue;
+    seen.add(url.href);
+    out.push({ fileUrl: url.href, ...(title ? { title } : {}) });
+  }
+  return out;
 }
 
 export function normalizeAttendees(list) {
@@ -131,7 +165,16 @@ function assertLength(field, value, max) {
 // The request body for events.insert / the patch for events.patch. Only
 // fields that were passed are included, so a patch never blanks out
 // something it wasn't asked to change.
-export function buildEventBody({ summary, description, location, start, end, time_zone, attendees }) {
+export function buildEventBody({
+  summary,
+  description,
+  location,
+  start,
+  end,
+  time_zone,
+  attendees,
+  attachments,
+}) {
   assertLength("summary", summary, MAX_SUMMARY_LENGTH);
   assertLength("description", description, MAX_DESCRIPTION_LENGTH);
   assertLength("location", location, MAX_LOCATION_LENGTH);
@@ -143,6 +186,7 @@ export function buildEventBody({ summary, description, location, start, end, tim
   else if (end !== undefined)
     throw new Error("Pass start along with end, so the new times can be checked together.");
   if (attendees !== undefined) body.attendees = normalizeAttendees(attendees).map((email) => ({ email }));
+  if (attachments !== undefined) body.attachments = normalizeAttachments(attachments);
   return body;
 }
 
@@ -212,6 +256,11 @@ export function summarizeEvent(event) {
       ...(a.self ? { self: true } : {}),
       ...(a.organizer ? { organizer: true } : {}),
     })),
+    attachments: (event.attachments || []).map((a) => ({
+      title: markUntrusted(a.title),
+      url: a.fileUrl,
+      mime_type: a.mimeType,
+    })),
     recurring_event_id: event.recurringEventId,
     html_link: event.htmlLink,
   };
@@ -228,6 +277,7 @@ export function diffEvent(current, patch) {
     start: (e) => whenOf(e.start),
     end: (e) => whenOf(e.end),
     attendees: (e) => (e.attendees || []).map((a) => a.email).sort(),
+    attachments: (e) => (e.attachments || []).map((a) => a.fileUrl).sort(),
   };
   for (const field of Object.keys(patch)) {
     const before = show[field](current);

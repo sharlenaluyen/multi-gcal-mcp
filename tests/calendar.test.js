@@ -13,6 +13,8 @@ import {
   buildRsvpAttendees,
   assertCanListCalendars,
   MAX_ATTENDEES,
+  normalizeAttachments,
+  MAX_ATTACHMENTS,
 } from "../src/calendar.js";
 import { markUntrusted } from "../src/mcp.js";
 
@@ -202,4 +204,48 @@ test("deleteScope warns when the id is a whole recurring series", () => {
     scope: "single_occurrence",
   });
   assert.deepEqual(deleteScope({ id: "one" }), { scope: "single_event" });
+});
+
+const DOC = "https://docs.google.com/document/d/abc123/edit";
+
+test("normalizeAttachments maps Drive links to Calendar's shape and drops duplicates", () => {
+  assert.deepEqual(
+    normalizeAttachments([
+      { file_url: DOC, title: "Agenda" },
+      { file_url: DOC },
+      { file_url: "https://drive.google.com/file/d/xyz/view" },
+    ]),
+    [{ fileUrl: DOC, title: "Agenda" }, { fileUrl: "https://drive.google.com/file/d/xyz/view" }]
+  );
+  assert.deepEqual(normalizeAttachments(undefined), []);
+});
+
+test("normalizeAttachments refuses non-Drive, non-https, junk URLs and too many files", () => {
+  for (const bad of [
+    "https://example.com/agenda.pdf",
+    "http://docs.google.com/document/d/abc/edit",
+    "https://docs.google.com.evil.com/x",
+    "not a url",
+  ]) {
+    assert.throws(() => normalizeAttachments([{ file_url: bad }]), undefined, bad);
+  }
+  const many = Array.from({ length: MAX_ATTACHMENTS + 1 }, (_, i) => ({ file_url: `${DOC}?n=${i}` }));
+  assert.throws(() => normalizeAttachments(many), /Too many attachments/);
+});
+
+test("buildEventBody includes attachments only when passed; [] clears them", () => {
+  assert.equal(buildEventBody({ summary: "x" }).attachments, undefined);
+  assert.deepEqual(buildEventBody({ attachments: [] }).attachments, []);
+  assert.deepEqual(buildEventBody({ attachments: [{ file_url: DOC }] }).attachments, [{ fileUrl: DOC }]);
+});
+
+test("diffEvent and summarizeEvent cover attachments", () => {
+  const current = { attachments: [{ fileUrl: "https://drive.google.com/file/d/old/view", title: "Old" }] };
+  const changes = diffEvent(current, { attachments: [{ fileUrl: DOC }] });
+  assert.deepEqual(changes, [
+    { field: "attachments", before: ["https://drive.google.com/file/d/old/view"], after: [DOC] },
+  ]);
+  assert.deepEqual(summarizeEvent(current).attachments, [
+    { title: markUntrusted("Old"), url: "https://drive.google.com/file/d/old/view", mime_type: undefined },
+  ]);
 });

@@ -19,6 +19,8 @@ import {
   MAX_DESCRIPTION_LENGTH,
   MAX_LOCATION_LENGTH,
   MAX_ATTENDEES,
+  MAX_ATTACHMENTS,
+  MAX_ATTACHMENT_TITLE_LENGTH,
 } from "./calendar.js";
 
 const server = new McpServer({ name: "multi-gcal-mcp", version: "1.0.0" });
@@ -189,7 +191,26 @@ const eventFields = {
     .max(MAX_ATTENDEES)
     .optional()
     .describe("Guest email addresses. Every guest gets an email invitation from Google."),
+  attachments: z
+    .array(
+      z.object({
+        file_url: z
+          .string()
+          .max(2048)
+          .describe("The file's Google Drive link (webViewLink from the Drive server's search_files)"),
+        title: z.string().max(MAX_ATTACHMENT_TITLE_LENGTH).optional().describe("Name shown on the event"),
+      })
+    )
+    .max(MAX_ATTACHMENTS)
+    .optional()
+    .describe(
+      "Google Drive files (agendas, docs) to attach. Attaching does NOT share the file: guests can open it only if it's already shared with them (use the Drive server's share_file)."
+    ),
 };
+
+// Attaching a Drive file doesn't grant anyone access to it - easy to miss.
+const ATTACHMENT_ACCESS_NOTE =
+  "Attaching a file doesn't share it. Guests without access to an attached file will see it but can't open it - share it with them via the Drive server's share_file first.";
 
 function writeError(action, info, detail, err) {
   logAuditEvent({
@@ -204,7 +225,7 @@ function writeError(action, info, detail, err) {
 
 defineTool(
   "create_event",
-  `Create a calendar event. By default this is a DRY RUN: it returns exactly what would be created and who Google would email an invitation to, and does NOT contact Google. Pass confirm_create: true only once the preview has been reviewed and approved - guests are emailed immediately and that can't be undone.${aliasEnumHint()}`,
+  `Create a calendar event, optionally with Google Drive files (e.g. an agenda doc) attached. By default this is a DRY RUN: it returns exactly what would be created and who Google would email an invitation to, and does NOT contact Google. Pass confirm_create: true only once the preview has been reviewed and approved - guests are emailed immediately and that can't be undone.${aliasEnumHint()}`,
   {
     account: z.string(),
     calendar_id: calendarId,
@@ -234,6 +255,7 @@ defineTool(
         dry_run: true,
         would_create: { calendar_id, ...body },
         invitations_emailed_to: emailed,
+        ...(body.attachments?.length ? { attachment_note: ATTACHMENT_ACCESS_NOTE } : {}),
         note: "Re-call with confirm_create: true to actually create this event.",
       });
     }
@@ -243,6 +265,7 @@ defineTool(
       const { data } = await calendar.events.insert({
         calendarId: calendar_id,
         sendUpdates: emailed.length ? "all" : "none",
+        supportsAttachments: true,
         requestBody: body,
       });
       logAuditEvent({
@@ -261,7 +284,7 @@ defineTool(
 
 defineTool(
   "update_event",
-  `Change an existing event's title, time, description, location, or guest list. Fields left out keep their current value; attendees, if passed, replaces the whole guest list. By default this is a DRY RUN that returns a before/after of every changed field and who Google would email about the change. Pass confirm_update: true only once that's been reviewed.${aliasEnumHint()}`,
+  `Change an existing event's title, time, description, location, guest list, or attached Drive files. Fields left out keep their current value; attendees or attachments, if passed, replaces that whole list (pass [] to remove every attachment). By default this is a DRY RUN that returns a before/after of every changed field and who Google would email about the change. Pass confirm_update: true only once that's been reviewed.${aliasEnumHint()}`,
   {
     account: z.string(),
     calendar_id: calendarId,
@@ -308,6 +331,7 @@ defineTool(
         event: summarizeEvent(current),
         changes,
         updates_emailed_to: emailed,
+        ...(patch.attachments?.length ? { attachment_note: ATTACHMENT_ACCESS_NOTE } : {}),
         note: changes.length
           ? "Re-call with confirm_update: true to apply these changes."
           : "Nothing would change - the event already has these values.",
@@ -320,6 +344,7 @@ defineTool(
         calendarId: calendar_id,
         eventId: event_id,
         sendUpdates: emailed.length ? "all" : "none",
+        supportsAttachments: true,
         requestBody: patch,
       });
       logAuditEvent({

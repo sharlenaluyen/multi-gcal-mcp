@@ -21,13 +21,28 @@ confirm flag to touch your calendar:
 
 | Tool | Confirm flag | What the preview shows |
 | --- | --- | --- |
-| `create_event` | `confirm_create: true` | The exact event, and every guest Google will email an invitation to |
-| `update_event` | `confirm_update: true` | A field-by-field before/after, and everyone who'll get an update email |
+| `create_event` | `confirm_create: true` | The exact event (including any attached Drive files), and every guest Google will email an invitation to |
+| `update_event` | `confirm_update: true` | A field-by-field before/after (attachments included), and everyone who'll get an update email |
 | `delete_event` | `confirm_delete: true` plus the preview's `etag` | The event, who'll get a cancellation (only if this account is the organizer), a warning if the id is a whole recurring series, and an `etag`. If the event changes after the preview, nothing is deleted and a fresh preview is returned |
 | `respond_to_event` | `confirm_send: true` | Your response changing from X to Y, and the organizer who's notified |
 
 Every dry run and every real write is appended to the shared audit log
 (`~/.google-mcp/audit.log`, tagged `"server": "multi-gcal-mcp"`).
+
+### Attaching agendas and documents
+
+`create_event` and `update_event` take an optional `attachments` list. Each
+entry is `{ file_url, title? }`, where `file_url` is a Google Drive link,
+for example the `link` (webViewLink) that multi-gdrive-mcp's `search_files`
+returns. Calendar only accepts Drive files, so any other URL is refused
+before Google sees it. Requests are sent with `supportsAttachments: true`.
+On `update_event`, `attachments` replaces the whole list, like `attendees`
+does. Pass `[]` to remove every attachment.
+
+**Attaching a file doesn't share it.** Guests can see an attached file but
+can open it only if they already have access. When an event has
+attachments, the preview reminds you of this. Share the file first with
+multi-gdrive-mcp's `share_file`.
 
 ### Why every write gets a dry run
 
@@ -98,6 +113,8 @@ then fully quit and reopen Claude Desktop:
   start. Defaults are one hour, or one day for all-day events.
 - Guests: each must be one plain email address (no display names, no
   comma-lists), deduplicated, at most 100.
+- Attachments: `https://drive.google.com/...` or `https://docs.google.com/...`
+  links only, deduplicated, at most 25 (Google's cap), title up to 256 chars.
 - Length caps: title 1,024 chars, description 8,192, location 1,024,
   search query 500, RSVP comment 1,000.
 
