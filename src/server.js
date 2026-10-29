@@ -3,7 +3,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { getConnectedAliases, getAccountInfo, withRetry, createAuditLogger } from "google-mcp-accounts";
-import { createToolDefiner, jsonResult, aliasEnumHint, markUntrusted, UNTRUSTED_NOTICE } from "./mcp.js";
+import {
+  createToolDefiner,
+  jsonResult,
+  accountInstructions,
+  markUntrusted,
+  UNTRUSTED_NOTICE,
+} from "./mcp.js";
 import {
   calendarClientFor,
   assertCanListCalendars,
@@ -23,7 +29,10 @@ import {
   MAX_ATTACHMENT_TITLE_LENGTH,
 } from "./calendar.js";
 
-const server = new McpServer({ name: "multi-gcal-mcp", version: "1.0.0" });
+const server = new McpServer(
+  { name: "multi-gcal-mcp", version: "1.0.0" },
+  { instructions: accountInstructions() }
+);
 
 // Shared ~/.google-mcp/audit.log, every line tagged with this server's name.
 const logAuditEvent = createAuditLogger("multi-gcal-mcp");
@@ -79,7 +88,7 @@ defineTool(
 
 defineTool(
   "list_calendars",
-  `List the calendars an account is subscribed to (id, name, access role, primary flag).${aliasEnumHint()}`,
+  `List the calendars an account is subscribed to (id, name, access role, primary flag).`,
   { account: z.string() },
   async ({ account }) => {
     const info = getAccountInfo(account);
@@ -124,7 +133,7 @@ async function listEvents({ account, calendar_id, query, time_min, time_max, max
 
 defineTool(
   "list_events",
-  `List events on one calendar in a time window, soonest first, with recurring events expanded. time_min defaults to now. Times are RFC 3339, e.g. 2026-11-03T00:00:00-08:00.${aliasEnumHint()}`,
+  `List events on one calendar in a time window, soonest first, with recurring events expanded. time_min defaults to now. Times are RFC 3339, e.g. 2026-11-03T00:00:00-08:00.`,
   {
     account: z.string(),
     calendar_id: calendarId,
@@ -144,7 +153,7 @@ defineTool(
 
 defineTool(
   "search_events",
-  `Free-text search of one calendar's events (matches title, description, location, attendees). Searches upcoming events unless time_min is given.${aliasEnumHint()}`,
+  `Free-text search of one calendar's events (matches title, description, location, attendees). Searches upcoming events unless time_min is given.`,
   {
     account: z.string(),
     query: z.string().min(1).max(500),
@@ -225,7 +234,7 @@ function writeError(action, info, detail, err) {
 
 defineTool(
   "create_event",
-  `Create a calendar event, optionally with Google Drive files (e.g. an agenda doc) attached. By default this is a DRY RUN: it returns exactly what would be created and who Google would email an invitation to, and does NOT contact Google. Pass confirm_create: true only once the preview has been reviewed and approved - guests are emailed immediately and that can't be undone.${aliasEnumHint()}`,
+  `Create a calendar event, optionally with Google Drive files (e.g. an agenda doc) attached. By default this is a DRY RUN: it returns exactly what would be created and who Google would email an invitation to, and does NOT contact Google. Pass confirm_create: true only once the preview has been reviewed and approved - guests are emailed immediately and that can't be undone.`,
   {
     account: z.string(),
     calendar_id: calendarId,
@@ -284,7 +293,7 @@ defineTool(
 
 defineTool(
   "update_event",
-  `Change an existing event's title, time, description, location, guest list, or attached Drive files. Fields left out keep their current value; attendees or attachments, if passed, replaces that whole list (pass [] to remove every attachment). By default this is a DRY RUN that returns a before/after of every changed field and who Google would email about the change. Pass confirm_update: true only once that's been reviewed.${aliasEnumHint()}`,
+  `Change an existing event's title, time, description, location, guest list, or attached Drive files. Fields left out keep their current value; attendees or attachments, if passed, replaces that whole list (pass [] to remove every attachment). By default this is a DRY RUN that returns a before/after of every changed field and who Google would email about the change. Pass confirm_update: true only once that's been reviewed.`,
   {
     account: z.string(),
     calendar_id: calendarId,
@@ -363,7 +372,7 @@ defineTool(
 
 defineTool(
   "delete_event",
-  `Delete an event. By default this is a DRY RUN that shows the event, who would get a cancellation email, and whether the id is a whole recurring series. Pass confirm_delete: true with the preview's etag only once that's been reviewed; if the event changed since the preview, nothing is deleted and a fresh preview is returned. If this account organizes the event, every guest gets a cancellation; if it's only a guest, the event is removed from this calendar and nobody is emailed. Ids from list_events/search_events are single occurrences; any other id may be a recurring series, and deleting that removes every occurrence.${aliasEnumHint()}`,
+  `Delete an event. By default this is a DRY RUN that shows the event, who would get a cancellation email, and whether the id is a whole recurring series. Pass confirm_delete: true with the preview's etag only once that's been reviewed; if the event changed since the preview, nothing is deleted and a fresh preview is returned. If this account organizes the event, every guest gets a cancellation; if it's only a guest, the event is removed from this calendar and nobody is emailed. Ids from list_events/search_events are single occurrences; any other id may be a recurring series, and deleting that removes every occurrence.`,
   {
     account: z.string(),
     calendar_id: calendarId,
@@ -462,7 +471,7 @@ defineTool(
 
 defineTool(
   "respond_to_event",
-  `Accept, decline, or tentatively accept an event this account was invited to. Google tells the organizer. By default this is a DRY RUN; pass confirm_send: true to actually send the response.${aliasEnumHint()}`,
+  `Accept, decline, or tentatively accept an event this account was invited to. Google tells the organizer. By default this is a DRY RUN; pass confirm_send: true to actually send the response.`,
   {
     account: z.string(),
     calendar_id: calendarId,
